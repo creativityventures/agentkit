@@ -2,10 +2,8 @@ import { z } from "zod";
 import { WalletProvider } from "../wallet-providers";
 import { Network } from "../network";
 import { StoredActionMetadata, ACTION_DECORATOR_KEY } from "./actionDecorator";
+import { ActionPolicy, ActionPolicyDeniedError } from "./actionPolicy";
 
-/**
- * Action is the interface for all actions.
- */
 export interface Action<TActionSchema extends z.ZodSchema = z.ZodSchema> {
   name: string;
   description: string;
@@ -13,46 +11,17 @@ export interface Action<TActionSchema extends z.ZodSchema = z.ZodSchema> {
   invoke: (args: z.infer<TActionSchema>) => Promise<string>;
 }
 
-/**
- * ActionProvider is the abstract base class for all action providers.
- *
- * @abstract
- */
 export abstract class ActionProvider<TWalletProvider extends WalletProvider = WalletProvider> {
-  /**
-   * The name of the action provider.
-   */
   public readonly name: string;
-
-  /**
-   * The action providers to combine.
-   */
   public readonly actionProviders: ActionProvider<TWalletProvider>[];
 
-  /**
-   * The constructor for the action provider.
-   *
-   * @param name - The name of the action provider.
-   * @param actionProviders - The action providers to combine.
-   */
-  constructor(
-    name: string,
-    // Update parameter type to match property type
-    actionProviders: ActionProvider<TWalletProvider>[],
-  ) {
+  constructor(name: string, actionProviders: ActionProvider<TWalletProvider>[]) {
     this.name = name;
     this.actionProviders = actionProviders;
   }
 
-  /**
-   * Gets the actions of the action provider bound to the given wallet provider.
-   *
-   * @param walletProvider - The wallet provider.
-   * @returns The actions of the action provider.
-   */
-  getActions(walletProvider: TWalletProvider): Action[] {
+  getActions(walletProvider: TWalletProvider, actionPolicy?: ActionPolicy): Action[] {
     const actions: Action[] = [];
-
     const actionProviders = [this, ...this.actionProviders];
 
     for (const actionProvider of actionProviders) {
@@ -63,11 +32,10 @@ export abstract class ActionProvider<TWalletProvider extends WalletProvider = Wa
 
       if (!actionsMetadataMap) {
         if (!(actionProvider instanceof ActionProvider)) {
-          console.warn(`Warning: ${actionProvider} is not an instance of ActionProvider.`);
+          console.warn("Warning: action provider is not an instance of ActionProvider.");
         } else {
-          console.warn(`Warning: ${actionProvider} has no actions.`);
+          console.warn("Warning: action provider has no actions.");
         }
-
         continue;
       }
 
@@ -76,15 +44,35 @@ export abstract class ActionProvider<TWalletProvider extends WalletProvider = Wa
           name: actionMetadata.name,
           description: actionMetadata.description,
           schema: actionMetadata.schema,
-          invoke: schemaArgs => {
+          invoke: async schemaArgs => {
+            const context = {
+              actionName: actionMetadata.name,
+              providerName: actionProvider.name,
+              walletProvider,
+              args: schemaArgs,
+            };
+
+            if (actionPolicy?.beforeAction) {
+              const decision = await actionPolicy.beforeAction(context);
+              if (!decision.allowed) {
+                throw new ActionPolicyDeniedError(actionMetadata.name, decision.reason);
+              }
+            }
+
             const args: unknown[] = [];
             if (actionMetadata.walletProvider) {
               args[0] = walletProvider;
             }
-
             args.push(schemaArgs);
 
-            return actionMetadata.invoke.apply(actionProvider, args);
+            try {
+              const result = await actionMetadata.invoke.apply(actionProvider, args);
+              await actionPolicy?.afterAction?.(context, result);
+              return result;
+            } catch (error) {
+              await actionPolicy?.onActionError?.(context, error);
+              throw error;
+            }
           },
         });
       }
@@ -93,11 +81,5 @@ export abstract class ActionProvider<TWalletProvider extends WalletProvider = Wa
     return actions;
   }
 
-  /**
-   * Checks if the action provider supports the given network.
-   *
-   * @param network - The network to check.
-   * @returns True if the action provider supports the network, false otherwise.
-   */
   abstract supportsNetwork(network: Network): boolean;
 }
