@@ -1,4 +1,5 @@
 export * from "./actionDecorator";
+export * from "./actionPolicy";
 export * from "./actionProvider";
 
 export * from "./customActionProvider";

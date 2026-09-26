@@ -1,47 +1,26 @@
 import { WalletProvider, CdpSmartWalletProvider } from "./wallet-providers";
-import { Action, ActionProvider, walletActionProvider } from "./action-providers";
+import { Action, ActionPolicy, ActionProvider, walletActionProvider } from "./action-providers";
 
-/**
- * Configuration options for AgentKit
- */
 export type AgentKitOptions = {
   cdpApiKeyId?: string;
   cdpApiKeySecret?: string;
   cdpWalletSecret?: string;
   walletProvider?: WalletProvider;
   actionProviders?: ActionProvider[];
+  actionPolicy?: ActionPolicy;
 };
 
-/**
- * AgentKit
- */
 export class AgentKit {
   private walletProvider: WalletProvider;
   private actionProviders: ActionProvider[];
+  private actionPolicy?: ActionPolicy;
 
-  /**
-   * Initializes a new AgentKit instance
-   *
-   * @param config - Configuration options for the AgentKit
-   * @param config.walletProvider - The wallet provider to use
-   * @param config.actionProviders - The action providers to use
-   * @param config.actions - The actions to use
-   */
   private constructor(config: AgentKitOptions & { walletProvider: WalletProvider }) {
     this.walletProvider = config.walletProvider;
     this.actionProviders = config.actionProviders || [walletActionProvider()];
+    this.actionPolicy = config.actionPolicy;
   }
 
-  /**
-   * Initializes a new AgentKit instance
-   *
-   * @param config - Configuration options for the AgentKit
-   * @param config.walletProvider - The wallet provider to use
-   * @param config.actionProviders - The action providers to use
-   * @param config.actions - The actions to use
-   *
-   * @returns A new AgentKit instance
-   */
   public static async from(
     config: AgentKitOptions = { actionProviders: [walletActionProvider()] },
   ): Promise<AgentKit> {
@@ -64,19 +43,13 @@ export class AgentKit {
     return new AgentKit({ ...config, walletProvider: walletProvider! });
   }
 
-  /**
-   * Returns the actions available to the AgentKit.
-   *
-   * @returns An array of actions
-   */
   public getActions(): Action[] {
     const actions: Action[] = [];
-
     const unsupported: string[] = [];
 
     for (const actionProvider of this.actionProviders) {
       if (actionProvider.supportsNetwork(this.walletProvider.getNetwork())) {
-        actions.push(...actionProvider.getActions(this.walletProvider));
+        actions.push(...actionProvider.getActions(this.walletProvider, this.actionPolicy));
       } else {
         unsupported.push(actionProvider.name);
       }
